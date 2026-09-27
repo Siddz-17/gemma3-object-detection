@@ -5,11 +5,16 @@ import logging
 import wandb
 from functools import partial
 
+import sys
+# Bypass outdated pre-installed torchao (< 0.16.0) on cloud environments causing PEFT dispatch crash
+sys.modules["torchao"] = None
+
 import torch
 from datasets import load_dataset
 from torch.utils.data import DataLoader
 from transformers import AutoProcessor, Gemma3ForConditionalGeneration
 from peft import LoraConfig, get_peft_model
+
 
 from config import Configuration
 from utils import train_collate_function
