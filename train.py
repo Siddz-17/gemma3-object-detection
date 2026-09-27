@@ -1,3 +1,6 @@
+import os
+os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
+
 import logging
 import wandb
 from functools import partial
@@ -6,6 +9,7 @@ import torch
 from datasets import load_dataset
 from torch.utils.data import DataLoader
 from transformers import AutoProcessor, Gemma3ForConditionalGeneration
+from peft import LoraConfig, get_peft_model
 
 from config import Configuration
 from utils import train_collate_function
@@ -63,21 +67,28 @@ if __name__ == "__main__":
     processor = AutoProcessor.from_pretrained(cfg.model_id)
     train_dataloader = get_dataloader(processor)
 
-    logger.info("Getting model & turning only attention parameters to trainable")
+    logger.info("Loading model with SDPA attention...")
     model = Gemma3ForConditionalGeneration.from_pretrained(
         cfg.model_id,
         torch_dtype=cfg.dtype,
         device_map="cpu",
         attn_implementation="sdpa",
     )
-    for name, param in model.named_parameters():
-        if "attn" in name:
-            param.requires_grad = True
-        else:
-            param.requires_grad = False
 
-    # Enable gradient checkpointing to drastically reduce activation memory
+    model.config.use_cache = False
     model.gradient_checkpointing_enable()
+
+    logger.info("Applying LoRA to attention projection layers...")
+    lora_config = LoraConfig(
+        r=16,
+        lora_alpha=32,
+        target_modules=["q_proj", "k_proj", "v_proj", "o_proj"],
+        lora_dropout=0.05,
+        bias="none",
+    )
+    model.enable_input_require_grads()
+    model = get_peft_model(model, lora_config)
+    model.print_trainable_parameters()
 
     model.train()
     model.to(cfg.device)
@@ -85,11 +96,11 @@ if __name__ == "__main__":
     # Credits to Sayak Paul for this beautiful expression
     params_to_train = list(filter(lambda x: x.requires_grad, model.parameters()))
 
-    # Use 8-bit AdamW optimizer to reduce optimizer state VRAM from ~5GB to ~1GB
+    # Use 8-bit AdamW optimizer
     try:
         import bitsandbytes as bnb
         optimizer = bnb.optim.AdamW8bit(params_to_train, lr=cfg.learning_rate)
-        logger.info("Using bitsandbytes 8-bit AdamW optimizer (saved ~4 GB VRAM)")
+        logger.info("Using bitsandbytes 8-bit AdamW optimizer")
     except Exception as e:
         logger.warning(f"Could not use 8-bit AdamW ({e}), falling back to standard AdamW")
         optimizer = torch.optim.AdamW(params_to_train, lr=cfg.learning_rate)
@@ -104,8 +115,15 @@ if __name__ == "__main__":
 
     train_model(model, optimizer, cfg, train_dataloader)
 
-    # Push the checkpoint to hub
-    model.push_to_hub(cfg.checkpoint_id)
+    # Push the checkpoint to hub (merge LoRA weights back so predict.py works standalone)
+    logger.info("Merging LoRA weights and pushing to Hub...")
+    try:
+        merged_model = model.merge_and_unload()
+        merged_model.push_to_hub(cfg.checkpoint_id)
+    except Exception as e:
+        logger.warning(f"Could not merge LoRA weights, pushing PEFT model: {e}")
+        model.push_to_hub(cfg.checkpoint_id)
+
     processor.push_to_hub(cfg.checkpoint_id)
 
     wandb.finish()
