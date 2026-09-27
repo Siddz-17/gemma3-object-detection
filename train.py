@@ -36,18 +36,25 @@ def get_dataloader(processor):
 def train_model(model, optimizer, cfg, train_dataloader):
     logger.info("Start training")
     global_step = 0
+    grad_accum_steps = getattr(cfg, "gradient_accumulation_steps", 1)
+    optimizer.zero_grad()
+
     for epoch in range(cfg.epochs):
         for idx, batch in enumerate(train_dataloader):
             outputs = model(**batch.to(model.device))
-            loss = outputs.loss
-            if idx % 100 == 0:
-                logger.info(f"Epoch: {epoch} Iter: {idx} Loss: {loss.item():.4f}")
-                wandb.log({"train/loss": loss.item(), "epoch": epoch}, step=global_step)
-
+            raw_loss = outputs.loss.item()
+            loss = outputs.loss / grad_accum_steps
             loss.backward()
-            optimizer.step()
-            optimizer.zero_grad()
-            global_step += 1
+
+            if (idx + 1) % grad_accum_steps == 0 or (idx + 1) == len(train_dataloader):
+                optimizer.step()
+                optimizer.zero_grad()
+                global_step += 1
+
+            if idx % 100 == 0:
+                logger.info(f"Epoch: {epoch} Iter: {idx} Loss: {raw_loss:.4f}")
+                wandb.log({"train/loss": raw_loss, "epoch": epoch}, step=global_step)
+
     return model
 
 
@@ -61,7 +68,7 @@ if __name__ == "__main__":
         cfg.model_id,
         torch_dtype=cfg.dtype,
         device_map="cpu",
-        attn_implementation="eager",
+        attn_implementation="sdpa",
     )
     for name, param in model.named_parameters():
         if "attn" in name:
