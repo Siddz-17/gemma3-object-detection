@@ -76,12 +76,25 @@ if __name__ == "__main__":
         else:
             param.requires_grad = False
 
+    # Enable gradient checkpointing to drastically reduce activation memory
+    model.gradient_checkpointing_enable()
+
     model.train()
     model.to(cfg.device)
 
     # Credits to Sayak Paul for this beautiful expression
     params_to_train = list(filter(lambda x: x.requires_grad, model.parameters()))
-    optimizer = torch.optim.AdamW(params_to_train, lr=cfg.learning_rate)
+
+    # Use 8-bit AdamW optimizer to reduce optimizer state VRAM from ~5GB to ~1GB
+    try:
+        import bitsandbytes as bnb
+        optimizer = bnb.optim.AdamW8bit(params_to_train, lr=cfg.learning_rate)
+        logger.info("Using bitsandbytes 8-bit AdamW optimizer (saved ~4 GB VRAM)")
+    except Exception as e:
+        logger.warning(f"Could not use 8-bit AdamW ({e}), falling back to standard AdamW")
+        optimizer = torch.optim.AdamW(params_to_train, lr=cfg.learning_rate)
+
+    torch.cuda.empty_cache()
 
     wandb.init(
         project=cfg.project_name,
