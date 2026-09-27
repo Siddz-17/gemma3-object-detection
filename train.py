@@ -10,26 +10,17 @@ from transformers import AutoProcessor, Gemma3ForConditionalGeneration
 from config import Configuration
 from utils import train_collate_function
 
-import albumentations as A
-
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 )
 logger = logging.getLogger(__name__)
 
 
-augmentations = A.Compose([
-    A.Resize(height=896, width=896),
-    A.HorizontalFlip(p=0.5),
-    A.ColorJitter(p=0.2),
-], bbox_params=A.BboxParams(format='coco', label_fields=['category_ids'], filter_invalid_bboxes=True))
-
-
 def get_dataloader(processor):
     logger.info("Fetching the dataset")
     train_dataset = load_dataset(cfg.dataset_id, split="train")
     train_collate_fn = partial(
-        train_collate_function, processor=processor, dtype=cfg.dtype, transform=augmentations
+        train_collate_function, processor=processor, dtype=cfg.dtype
     )
 
     logger.info("Building data loader")

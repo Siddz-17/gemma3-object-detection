@@ -6,7 +6,7 @@ from torch.utils.data import DataLoader
 from transformers import AutoProcessor, Gemma3ForConditionalGeneration
 
 from config import Configuration
-from utils import test_collate_function, visualize_bounding_boxes
+from utils import parse_model_output, save_receipt_prediction, test_collate_function
 
 os.makedirs("outputs", exist_ok=True)
 
@@ -37,14 +37,17 @@ if __name__ == "__main__":
     sample, sample_images = next(iter(test_dataloader))
     sample = sample.to(cfg.device)
 
-    generation = model.generate(**sample, max_new_tokens=100)
+    generation = model.generate(**sample, max_new_tokens=cfg.max_new_tokens)
     decoded = processor.batch_decode(generation, skip_special_tokens=True)
 
     file_count = 0
     for output_text, sample_image in zip(decoded, sample_images):
         image = sample_image[0]
-        width, height = image.size
-        visualize_bounding_boxes(
-            image, output_text, width, height, f"outputs/output_{file_count}.png"
+        extracted_data = parse_model_output(output_text)
+        save_receipt_prediction(
+            image,
+            extracted_data,
+            image_path=f"outputs/output_{file_count}.png",
+            json_path=f"outputs/output_{file_count}.json",
         )
         file_count += 1

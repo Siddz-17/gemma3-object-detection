@@ -7,4 +7,3 @@ huggingface_hub[hf_xet]
 bitsandbytes
 wandb
 peft
-albumentations
