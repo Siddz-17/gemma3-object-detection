@@ -17,7 +17,7 @@ class Configuration:
     batch_size: int = 1
     gradient_accumulation_steps: int = 4
     learning_rate: float = 2e-05
+    max_grad_norm: float = 1.0
 
-    epochs = 2
+    epochs: int = 2
     max_new_tokens: int = 512
-

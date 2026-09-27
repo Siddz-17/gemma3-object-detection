@@ -1,6 +1,7 @@
 import os
 from functools import partial
 
+import torch
 from datasets import load_dataset
 from torch.utils.data import DataLoader
 from transformers import AutoProcessor, Gemma3ForConditionalGeneration
@@ -11,7 +12,7 @@ from utils import parse_model_output, save_receipt_prediction, test_collate_func
 os.makedirs("outputs", exist_ok=True)
 
 
-def get_dataloader(processor):
+def get_dataloader(processor, cfg):
     test_dataset = load_dataset(cfg.dataset_id, split="test")
     test_collate_fn = partial(
         test_collate_function, processor=processor, dtype=cfg.dtype
@@ -22,32 +23,45 @@ def get_dataloader(processor):
     return test_dataloader
 
 
-if __name__ == "__main__":
-    cfg = Configuration()
+def predict(cfg, max_samples: int = 10):
     processor = AutoProcessor.from_pretrained(cfg.checkpoint_id)
     model = Gemma3ForConditionalGeneration.from_pretrained(
         cfg.checkpoint_id,
         torch_dtype=cfg.dtype,
-        device_map="cpu",
+        device_map=cfg.device if cfg.device != "cpu" else None,
+        attn_implementation="sdpa",
     )
+    if cfg.device == "cpu":
+        model.to(cfg.device)
+
     model.eval()
-    model.to(cfg.device)
 
-    test_dataloader = get_dataloader(processor=processor)
-    sample, sample_images = next(iter(test_dataloader))
-    sample = sample.to(cfg.device)
-
-    generation = model.generate(**sample, max_new_tokens=cfg.max_new_tokens)
-    decoded = processor.batch_decode(generation, skip_special_tokens=True)
-
+    test_dataloader = get_dataloader(processor, cfg)
     file_count = 0
-    for output_text, sample_image in zip(decoded, sample_images):
-        image = sample_image[0]
-        extracted_data = parse_model_output(output_text)
-        save_receipt_prediction(
-            image,
-            extracted_data,
-            image_path=f"outputs/output_{file_count}.png",
-            json_path=f"outputs/output_{file_count}.json",
-        )
-        file_count += 1
+
+    with torch.no_grad():
+        for batch, batch_images in test_dataloader:
+            batch = batch.to(cfg.device)
+            generation = model.generate(**batch, max_new_tokens=cfg.max_new_tokens)
+            decoded = processor.batch_decode(generation, skip_special_tokens=True)
+
+            for output_text, sample_image in zip(decoded, batch_images):
+                image = sample_image[0]
+                extracted_data = parse_model_output(output_text)
+                save_receipt_prediction(
+                    image,
+                    extracted_data,
+                    image_path=f"outputs/output_{file_count}.png",
+                    json_path=f"outputs/output_{file_count}.json",
+                )
+                print(f"[PREDICT] Saved prediction {file_count}: outputs/output_{file_count}.json")
+                file_count += 1
+
+                if max_samples is not None and file_count >= max_samples:
+                    print(f"[PREDICT] Reached max sample limit ({max_samples}). Done.")
+                    return
+
+
+if __name__ == "__main__":
+    cfg = Configuration()
+    predict(cfg, max_samples=10)
